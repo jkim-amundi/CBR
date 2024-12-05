@@ -11,6 +11,7 @@ import datetime
 from dateutil.relativedelta import relativedelta
 
 os.chdir(r'P:/Amundi_Milan/Investment/SPECIALISTS/QUANT_RESEARCH/ASSET_ALLOCATION/crossasset/Jung/cbr/')
+# os.chdir(r'/Users/jhkmm/Documents/python_mbpro/TAA-Report.git/TAA-Report')
 
 # %%
 data_file = 'cbr.xlsm'
@@ -20,15 +21,17 @@ data_assets = pd.read_excel(data_file,sheet_name='input-assets',header=0, index_
 cash = data_assets.iloc[:,-1]
 cash_mom = cash.pct_change(periods=1).dropna()
 # EQ
-data_assets = data_assets.iloc[:,0]
+# data_assets = data_assets.iloc[:,0]
 # GOV
 # data_assets = data_assets.iloc[:,1]
 # IG
-# data_assets = data_assets.iloc[:,2]
+data_assets = data_assets.iloc[:,2]
 # HY
 # data_assets = data_assets.iloc[:,3]
 # COMMO
 # data_assets = data_assets.iloc[:,4]
+# CASH
+# data_assets = data_assets.iloc[:,5]
 
 delta_macro_yoy = data_macro.pct_change(periods=12).dropna()
 delta_assets_yoy = data_assets.pct_change(periods=12).dropna()
@@ -75,14 +78,16 @@ def calc_corr(macro_data: pd.DataFrame, asset_data: pd.DataFrame, asset_idx: int
 corr_spx = calc_corr(macro_data=delta_macro_yoy,asset_data=delta_assets_mom, asset_idx=0)
 significant_factors = np.abs(corr_spx) > 0.1
 r_corr,c_corr = corr_spx.shape
-
+factors = corr_spx.columns
 # %%
 low = []; high = []
+significant_factors_names = []
 desc_low = pd.DataFrame(); desc_high = pd.DataFrame()
 for i in range(r_corr):
     # point in time split
     df_pctile_macro_subset = df_pctile_macro[df_pctile_macro.index<=corr_spx.index[i]]
     # choose only significant factors (both macro and correlations)
+    significant_factors_names.append(factors[significant_factors.iloc[i]].tolist())
     df_pctile_macro_subset = df_pctile_macro_subset.iloc[:,significant_factors.values[i,:]]
     corr_subset = corr_spx.iloc[i,significant_factors.values[i,:]]
     # multiply 
@@ -122,6 +127,8 @@ desc_low.columns = desc_high.columns = corr_spx.index.date
 
 low_df = pd.DataFrame(low, index=corr_spx.index)
 high_df = pd.DataFrame(high, index=corr_spx.index)
+
+significant_factors_names = pd.DataFrame(significant_factors_names,index=corr_spx.index)
 # %%
 # Strategy
 def ptf_analytics(total_returns: pd.DataFrame, returns: pd.DataFrame):
@@ -143,7 +150,6 @@ def ptf_analytics(total_returns: pd.DataFrame, returns: pd.DataFrame):
     id =  ["CAGR", "Ann. Ret", "Ann. Vol", "Sharpe","CVaR","Total Ret"]
     performance = pd.DataFrame(t, id)
     return performance, returns_grouped
-
 
 threshold = desc_low.T[["mean"]]
 r,c = threshold.shape
@@ -177,7 +183,6 @@ output_strat = pd.concat([strategy_ls.describe(), strategy_ls.describe(), pd.Dat
 output_yearly=pd.concat([strategy_lc_yearly,strategy_ls_yearly,asset_yearly],axis=1)
 output_yearly.columns=[["Long/Cash", "Long/Short", delta_assets_mom.name]]
 
-
 # %%
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=strategy_lc_total_ret.index,y=strategy_lc_total_ret.values.flatten(), mode='lines',name="Long/Cash"))
@@ -186,6 +191,23 @@ fig.add_trace(go.Scatter(x=assets_total_ret.index,y=assets_total_ret.values.flat
 fig.show()
 output_strat
 # cbr_strategy(trigger=desc_low, asset_return=delta_assets_mom)
+
+# %%
+damper = 0.05
+r_strat,_ = desc_low.T.shape
+zscore_avg = (desc_low.T['mean']+desc_low.T['50%'])/(2*desc_low.T['std'])
+zscore_pct = np.zeros(r_strat)
+for i in range(r_strat):
+    zscore_pct[i] = stats.percentileofscore(zscore_avg.iloc[:i+1],zscore_avg.iloc[i])/100
+zscore_pct = pd.Series(zscore_pct, index=zscore_avg.index)
+
+strategy_monitor = pd.concat([desc_low.T['mean'],desc_low.T['50%'],desc_low.T['std'],zscore_avg,zscore_pct],axis=1)
+fields = ['mean', 'median', 'std', 'avg', 'pct']
+strategy_monitor.columns = [data_assets.name + "_" + field for field in fields]
+assets_perf = delta_assets_mom['2005-04-30':]
+sign = np.sign(desc_low.T['mean']).shift().dropna()
+strategy_monitor[data_assets.name + "_" + 'signal'] = damper * sign * assets_perf
+strategy_monitor = strategy_monitor.dropna()
 # %%
 
 marker = datetime.datetime.now().strftime("%m-%d-%Y-%H.%M.%S")
@@ -202,6 +224,7 @@ with pd.ExcelWriter(data_assets.name+"_"+marker+'.xlsx') as writer:
     strategy_ls_total_ret.to_excel(writer, sheet_name= "PERF", startcol=9)
     assets_total_ret.to_excel(writer, sheet_name="PERF", startcol=12)
     output_yearly.to_excel(writer, sheet_name="PERF", startrow=12)
+    significant_factors_names.to_excel(writer, sheet_name="PERF", startcol = 16)
 # def mult_corr_pct(macro_pct: pd.DataFrame, corr: pd.DataFrame):
 #     r_corr,c_corr = corr.shape
 #     r_macro,c_macro = macro_pct.shape
@@ -211,5 +234,12 @@ with pd.ExcelWriter(data_assets.name+"_"+marker+'.xlsx') as writer:
 #     for i in range(c_corr):
 
 #     return corr_pct_df
+
+# %%
+# import csv
+# with open(data_assets.name + '_out.csv','w', newline='') as csvfile:
+#     writer = csv.writer(csvfile)
+#     writer.writerows(strategy_monitor)
+strategy_monitor.to_csv(data_assets.name + '_out.csv')
 
 # %%
